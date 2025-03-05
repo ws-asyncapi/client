@@ -1,5 +1,6 @@
-// biome-ignore lint/suspicious/noEmptyInterface: <explanation>
-export interface WebsocketAsyncAPIMap {}
+import type { CloseEvent, OpenEvent, WebsocketAsyncAPIMap } from "./types.ts";
+
+export * from "./types.ts";
 
 export function websocketAsyncAPI<
     // @ts-ignore hack to generate declare module statements
@@ -21,8 +22,14 @@ export function websocketAsyncAPI<
     });
 
     return {
-        "~original": ws,
+        "~original": ws as WebSocket,
         opened: promise,
+        onOpen: (callback: (data: OpenEvent) => void) => {
+            ws.onopen = callback;
+        },
+        onClose: (callback: (data: CloseEvent) => void) => {
+            ws.onclose = callback;
+        },
         // @ts-ignore hack to generate declare module statements
         onEvent: <Event extends keyof T["eventMap"]>(
             eventName: Event,
