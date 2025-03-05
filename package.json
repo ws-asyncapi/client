@@ -1,0 +1,33 @@
+{
+    "name": "@ws-asyncapi/cli",
+    "version": "0.0.1",
+    "homepage": "https://github.com/kravetsone/ws-asyncapi",
+    "readme": "https://github.com/kravetsone/ws-asyncapi",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/kravetsone/ws-asyncapi.git"
+    },
+    "author": {
+        "url": "https://github.com/kravetsone",
+        "name": "kravets"
+    },
+    "type": "module",
+    "bin": "dist/index.js",
+    "devDependencies": {
+        "@biomejs/biome": "^1.9.4",
+        "@types/bun": "^1.2.4",
+        "pkgroll": "^2.11.2",
+        "typescript": "^5.8.2",
+        "@ws-asyncapi/cli": "link:@ws-asyncapi/cli"
+    },
+    "scripts": {
+        "prepublishOnly": "bunx pkgroll",
+        "t": "bunx @ws-asyncapi/cli http://localhost:3005/asyncapi.json && bunx @biomejs/biome check generated.ts --write"
+    },
+    "files": ["dist"],
+    "license": "MIT",
+    "dependencies": {
+        "asyncapi-types": "3.0.2",
+        "json-schema-to-typescript": "^15.0.4"
+    }
+}
