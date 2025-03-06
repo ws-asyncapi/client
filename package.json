@@ -1,5 +1,6 @@
 {
     "name": "@ws-asyncapi/client",
+    "description": "AsyncAPI client for WebSocket",
     "version": "0.0.1",
     "author": {
         "url": "https://github.com/kravetsone",
