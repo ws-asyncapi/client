@@ -40,7 +40,3 @@ client.call("test", {
     name: "test",
 });
 ```
-
-## TODO:
-
-[ ] Redesign types for different channels

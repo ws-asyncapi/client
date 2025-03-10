@@ -1,16 +1,28 @@
-import type { CloseEvent, OpenEvent, WebsocketAsyncAPIMap } from "./types.ts";
+import type {
+    CloseEvent,
+    FindMatchingAddressKey,
+    OpenEvent,
+    WebsocketAsyncAPIMap,
+} from "./types.ts";
 
 export * from "./types.ts";
 
 export function websocketAsyncAPI<
+    Path extends // @ts-ignore hack to generate declare module statements
+    WebsocketAsyncAPIMap["addresses"][keyof WebsocketAsyncAPIMap["addresses"]],
+    Channel extends FindMatchingAddressKey<
+        // @ts-ignore hack to generate declare module statements
+        WebsocketAsyncAPIMap["addresses"],
+        Path
+    >,
     // @ts-ignore hack to generate declare module statements
     T = {
         // @ts-ignore hack to generate declare module statements
-        commandMap: WebsocketAsyncAPIMap["data"]["commandMap"];
+        commandMap: WebsocketAsyncAPIMap["data"][Channel]["commandMap"];
         // @ts-ignore hack to generate declare module statements
-        eventMap: WebsocketAsyncAPIMap["data"]["eventMap"];
+        eventMap: WebsocketAsyncAPIMap["data"][Channel]["eventMap"];
     },
->(url: string) {
+>(url: string, path: Path) {
     const ws = new WebSocket(url);
     const promise = new Promise<void>((resolve, reject) => {
         ws.onopen = () => {
@@ -48,13 +60,15 @@ export function websocketAsyncAPI<
         call: <
             // @ts-ignore hack to generate declare module statements
             Command extends keyof T["commandMap"],
-            // @ts-ignore hack to generate declare module statements
-            Data = T["commandMap"][Command],
         >(
             command: Command,
-            data: Data,
+            // @ts-ignore hack to generate declare module statements
+            ...data: T["commandMap"][Command] extends never
+                ? []
+                : // @ts-ignore hack to generate declare module statements
+                  [T["commandMap"][Command]]
         ) => {
-            ws.send(JSON.stringify([command, data]));
+            ws.send(JSON.stringify([command, ...data]));
         },
     };
 }

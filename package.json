@@ -31,7 +31,7 @@
     "readme": "https://github.com/kravetsone/ws-asyncapi",
     "scripts": {
         "prepublishOnly": "bunx pkgroll",
-        "t": "bunx @ws-asyncapi/cli http://localhost:3005/asyncapi.json && bunx @biomejs/biome check generated.ts --write"
+        "t": "bunx @ws-asyncapi/cli http://localhost:3000/asyncapi.json && bunx @biomejs/biome check generated.ts --write"
     },
     "type": "module"
 }
