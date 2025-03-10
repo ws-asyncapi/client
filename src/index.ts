@@ -3,6 +3,7 @@ import type {
     FindMatchingAddressKey,
     OpenEvent,
     WebsocketAsyncAPIMap,
+    WebsocketAsyncAPIOptions,
 } from "./types.ts";
 import { joinUrlPath } from "./utils.ts";
 
@@ -23,7 +24,16 @@ export function websocketAsyncAPI<
         // @ts-ignore hack to generate declare module statements
         eventMap: WebsocketAsyncAPIMap["data"][Channel]["eventMap"];
     },
->(url: string, path: Path) {
+>(
+    url: string,
+    path: Path,
+    options?: WebsocketAsyncAPIOptions<
+        // @ts-ignore hack to generate declare module statements
+        WebsocketAsyncAPIMap["data"][Channel]["query"],
+        // @ts-ignore hack to generate declare module statements
+        WebsocketAsyncAPIMap["data"][Channel]["headers"]
+    >,
+) {
     const fullUrl = joinUrlPath(url, path);
     const ws = new WebSocket(fullUrl);
     const promise = new Promise<void>((resolve, reject) => {

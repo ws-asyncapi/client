@@ -26,3 +26,11 @@ export type FindMatchingAddressKey<
 //     Path extends `${infer Prefix}/{${string}}${infer Suffix}`
 //         ? `${Prefix}/${string}${ExpandPathPattern<Suffix>}`
 //         : Path;
+
+export interface WebsocketAsyncAPIOptions<
+    Query extends Record<string, string> = Record<string, string>,
+    Headers extends Record<string, string> = Record<string, string>,
+> {
+    query?: Query;
+    headers?: Headers;
+}
