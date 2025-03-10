@@ -34,7 +34,8 @@ export function websocketAsyncAPI<
         WebsocketAsyncAPIMap["data"][Channel]["headers"]
     >,
 ) {
-    const fullUrl = joinUrlPath(url, path);
+    const fullUrl = joinUrlPath(url, path, options?.query);
+
     const ws = new WebSocket(fullUrl);
     const promise = new Promise<void>((resolve, reject) => {
         ws.onopen = () => {
