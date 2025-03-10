@@ -4,6 +4,7 @@ import type {
     OpenEvent,
     WebsocketAsyncAPIMap,
 } from "./types.ts";
+import { joinUrlPath } from "./utils.ts";
 
 export * from "./types.ts";
 
@@ -23,7 +24,8 @@ export function websocketAsyncAPI<
         eventMap: WebsocketAsyncAPIMap["data"][Channel]["eventMap"];
     },
 >(url: string, path: Path) {
-    const ws = new WebSocket(url);
+    const fullUrl = joinUrlPath(url, path);
+    const ws = new WebSocket(fullUrl);
     const promise = new Promise<void>((resolve, reject) => {
         ws.onopen = () => {
             resolve();
