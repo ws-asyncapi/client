@@ -70,3 +70,33 @@ export interface RequestOptions {
     /** override the default RPC timeout for this call (ms) */
     timeout?: number;
 }
+
+/** Built-in error codes the runtime can produce in addition to declared ones. */
+export type BuiltinErrorCode =
+    | "VALIDATION"
+    | "NOT_FOUND"
+    | "INTERNAL"
+    | "TIMEOUT"
+    | "OVERLOADED";
+
+/**
+ * A typed RPC error: either one of the codes declared in the contract (with its
+ * `data` payload typed), or a built-in runtime code (`data` is `unknown`). The
+ * codes are kept as distinct literals so `if (error.code === "X")` narrows to
+ * the typed `data` for that code. (Undeclared custom codes still arrive at
+ * runtime — reach them via `request()` + `catch` on the open-coded `RpcError`.)
+ */
+export type TypedRpcError<Errors> =
+    | {
+          [C in keyof Errors]: { code: C; message: string; data: Errors[C] };
+      }[keyof Errors]
+    | { code: BuiltinErrorCode; message: string; data: unknown };
+
+/**
+ * Result of `safeRequest`: a discriminated union you narrow on `error`. On
+ * success `error` is `null`; on failure `data` is `null` and `error` carries a
+ * typed, discriminated code.
+ */
+export type SafeResult<Output, Errors> =
+    | { data: Output; error: null }
+    | { data: null; error: TypedRpcError<Errors> };

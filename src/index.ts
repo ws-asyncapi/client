@@ -11,6 +11,7 @@ import type {
     OpenEvent,
     ReconnectOptions,
     RequestOptions,
+    SafeResult,
     WebsocketAsyncAPIMap,
     WebsocketAsyncAPIOptions,
 } from "./types.ts";
@@ -78,6 +79,7 @@ export function websocketAsyncAPI<
     let corrSeq = 0;
     let sessionId: string | null = null;
     let lastOffset: number | string = 0;
+    let wasRecovered = false;
     let openedSettled = false;
 
     const pending = new Map<number, PendingRequest>();
@@ -85,6 +87,7 @@ export function websocketAsyncAPI<
     const openHandlers = new Set<(event: OpenEvent) => void>();
     const closeHandlers = new Set<(event: CloseEvent) => void>();
     const errorHandlers = new Set<(event: Event) => void>();
+    const recoverHandlers = new Set<(recovered: boolean) => void>();
     let outbox: Array<string | Uint8Array> = [];
 
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -150,10 +153,37 @@ export function websocketAsyncAPI<
         pending.clear();
     }
 
+    /** Core RPC: mint a corrId, send a Request, resolve/reject via the pending
+     *  table. Shared by `request` (throws) and `safeRequest` (typed result). */
+    function doRequest(
+        command: string,
+        input: unknown,
+        options?: RequestOptions,
+    ): Promise<unknown> {
+        const corrId = ++corrSeq;
+        const timeout = options?.timeout ?? requestTimeout;
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                pending.delete(corrId);
+                reject(
+                    new RpcError(
+                        "TIMEOUT",
+                        `RPC "${command}" timed out after ${timeout}ms`,
+                    ),
+                );
+            }, timeout);
+            pending.set(corrId, { resolve, reject, timer });
+            send([Frame.Request, command, corrId, input]);
+        });
+    }
+
     function handleFrame(frame: AnyFrame) {
         switch (frame[0]) {
             case Frame.Event: {
-                const [, name, payload] = frame;
+                const [, name, payload, offset] = frame;
+                // advance the recovery cursor (offset present only when the
+                // server backplane supports connection-state-recovery)
+                if (offset !== undefined) lastOffset = offset;
                 const set = eventHandlers.get(name);
                 if (set) for (const cb of set) cb(payload);
                 break;
@@ -188,9 +218,15 @@ export function websocketAsyncAPI<
                 break;
             }
             case Frame.Welcome: {
-                const [, sid, , offset] = frame;
+                const [, sid, recovered, offset] = frame;
                 sessionId = sid;
-                lastOffset = offset;
+                wasRecovered = recovered === 1;
+                // On a recovered session the server has already replayed the
+                // missed events (which advanced lastOffset); keep our cursor.
+                // On a clean connect, adopt the server's current offset as the
+                // starting cursor so a later blip replays only from here.
+                if (!wasRecovered) lastOffset = offset;
+                for (const cb of recoverHandlers) cb(wasRecovered);
                 break;
             }
             default:
@@ -269,7 +305,24 @@ export function websocketAsyncAPI<
         get connected() {
             return connected;
         },
+        /** Server-assigned session id (stable across reconnects). */
+        get sessionId() {
+            return sessionId;
+        },
+        /** Whether the most recent (re)connect recovered missed events. */
+        get recovered() {
+            return wasRecovered;
+        },
         opened,
+        /**
+         * Fires after each (re)connect handshake with whether the session was
+         * recovered (`true` = missed events were replayed, `false` = clean
+         * (re)subscribe). Useful to refetch state only when recovery failed.
+         */
+        onRecover(callback: (recovered: boolean) => void) {
+            recoverHandlers.add(callback);
+            return () => recoverHandlers.delete(callback);
+        },
         onOpen(callback: (data: OpenEvent) => void) {
             openHandlers.add(callback);
             return () => openHandlers.delete(callback);
@@ -319,27 +372,50 @@ export function websocketAsyncAPI<
             input: T["rpcMap"][Command]["input"],
             options?: RequestOptions,
             // @ts-ignore hack to generate declare module statements
-        ): Promise<T["rpcMap"][Command]["output"]> => {
-            const corrId = ++corrSeq;
-            const timeout = options?.timeout ?? requestTimeout;
-            return new Promise((resolve, reject) => {
-                const timer = setTimeout(() => {
-                    pending.delete(corrId);
-                    reject(
-                        new RpcError(
-                            "TIMEOUT",
-                            `RPC "${String(command)}" timed out after ${timeout}ms`,
-                        ),
-                    );
-                }, timeout);
-                pending.set(corrId, {
-                    resolve: resolve as (value: unknown) => void,
-                    reject,
-                    timer,
-                });
-                send([Frame.Request, command as string, corrId, input]);
-                // @ts-ignore generic Promise resolution
-            });
+        ): Promise<T["rpcMap"][Command]["output"]> =>
+            // @ts-ignore generic Promise resolution
+            doRequest(command as string, input, options),
+        /**
+         * Like {@link request}, but never throws: returns a typed, discriminated
+         * `{ data, error }` result. Narrow on `error` (and `error.code`) to get
+         * the declared error's typed `data`.
+         */
+        safeRequest: async <
+            // @ts-ignore hack to generate declare module statements
+            Command extends keyof T["rpcMap"],
+        >(
+            command: Command,
+            // @ts-ignore hack to generate declare module statements
+            input: T["rpcMap"][Command]["input"],
+            options?: RequestOptions,
+        ): Promise<
+            SafeResult<
+                // @ts-ignore hack to generate declare module statements
+                T["rpcMap"][Command]["output"],
+                // @ts-ignore hack to generate declare module statements
+                T["rpcMap"][Command]["errors"]
+            >
+        > => {
+            try {
+                const data = await doRequest(
+                    command as string,
+                    input,
+                    options,
+                );
+                // @ts-ignore generic result narrowing
+                return { data, error: null };
+            } catch (e) {
+                const error =
+                    e instanceof RpcError
+                        ? { code: e.code, message: e.message, data: e.data }
+                        : {
+                              code: "INTERNAL",
+                              message: String(e),
+                              data: undefined,
+                          };
+                // @ts-ignore generic result narrowing
+                return { data: null, error };
+            }
         },
         close(code?: number, reason?: string) {
             manualClose = true;
