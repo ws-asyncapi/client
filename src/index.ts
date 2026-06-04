@@ -35,6 +35,48 @@ interface PendingRequest {
     timer: ReturnType<typeof setTimeout>;
 }
 
+/** Buffers a server stream's items and bridges them to an async iterator. */
+class StreamController {
+    #queue: unknown[] = [];
+    #waiting?: {
+        resolve: (r: IteratorResult<unknown>) => void;
+        reject: (e: unknown) => void;
+    };
+    #ended = false;
+    #error?: unknown;
+
+    push(value: unknown): void {
+        if (this.#waiting) {
+            this.#waiting.resolve({ value, done: false });
+            this.#waiting = undefined;
+        } else this.#queue.push(value);
+    }
+    end(): void {
+        this.#ended = true;
+        if (this.#waiting) {
+            this.#waiting.resolve({ value: undefined, done: true });
+            this.#waiting = undefined;
+        }
+    }
+    fail(error: unknown): void {
+        this.#error = error;
+        this.#ended = true;
+        if (this.#waiting) {
+            this.#waiting.reject(error);
+            this.#waiting = undefined;
+        }
+    }
+    next(): Promise<IteratorResult<unknown>> {
+        if (this.#queue.length)
+            return Promise.resolve({ value: this.#queue.shift(), done: false });
+        if (this.#error) return Promise.reject(this.#error);
+        if (this.#ended) return Promise.resolve({ value: undefined, done: true });
+        return new Promise((resolve, reject) => {
+            this.#waiting = { resolve, reject };
+        });
+    }
+}
+
 export function websocketAsyncAPI<
     Path extends // @ts-ignore hack to generate declare module statements
     WebsocketAsyncAPIMap["addresses"][keyof WebsocketAsyncAPIMap["addresses"]],
@@ -53,6 +95,8 @@ export function websocketAsyncAPI<
         rpcMap: WebsocketAsyncAPIMap["data"][Channel]["rpcMap"];
         // @ts-ignore hack to generate declare module statements
         serverRpcMap: WebsocketAsyncAPIMap["data"][Channel]["serverRpcMap"];
+        // @ts-ignore hack to generate declare module statements
+        streamMap: WebsocketAsyncAPIMap["data"][Channel]["streamMap"];
     },
 >(
     url: string,
@@ -95,6 +139,8 @@ export function websocketAsyncAPI<
     let openedSettled = false;
 
     const pending = new Map<number, PendingRequest>();
+    let streamSeq = 0;
+    const streams = new Map<number, StreamController>();
     const eventHandlers = new Map<string, Set<(data: unknown) => void>>();
     const openHandlers = new Set<(event: OpenEvent) => void>();
     const closeHandlers = new Set<(event: CloseEvent) => void>();
@@ -168,6 +214,11 @@ export function websocketAsyncAPI<
             p.reject(error);
         }
         pending.clear();
+    }
+
+    function failAllStreams(error: RpcError) {
+        for (const [, s] of streams) s.fail(error);
+        streams.clear();
     }
 
     /** Core RPC: mint a corrId, send a Request, resolve/reject via the pending
@@ -294,6 +345,21 @@ export function websocketAsyncAPI<
                     );
                 break;
             }
+            case Frame.StreamData: {
+                streams.get(frame[1])?.push(frame[2]);
+                break;
+            }
+            case Frame.StreamEnd: {
+                streams.get(frame[1])?.end();
+                streams.delete(frame[1]);
+                break;
+            }
+            case Frame.StreamError: {
+                const [, streamId, code, message, data] = frame;
+                streams.get(streamId)?.fail(new RpcError(code, message, data));
+                streams.delete(streamId);
+                break;
+            }
             case Frame.Welcome: {
                 const [, sid, recovered, offset] = frame;
                 sessionId = sid;
@@ -374,6 +440,9 @@ export function websocketAsyncAPI<
         ws.onclose = (event) => {
             connected = false;
             stopHeartbeat();
+            // streams don't survive a reconnect (the server aborts them on
+            // disconnect), so fail any active ones now.
+            failAllStreams(new RpcError("INTERNAL", "connection closed"));
             for (const cb of closeHandlers)
                 cb(event as unknown as CloseEvent);
 
@@ -510,6 +579,42 @@ export function websocketAsyncAPI<
         ): Promise<T["rpcMap"][Command]["output"]> =>
             // @ts-ignore generic Promise resolution
             doRequest(command as string, input, options),
+        /**
+         * Open a typed stream and consume it with `for await`. Stopping iteration
+         * (a `break`, `return`, or throw) sends a StreamStop so the server cancels
+         * the handler. A server-side error surfaces as a thrown `RpcError`.
+         */
+        stream: <
+            // @ts-ignore hack to generate declare module statements
+            Name extends keyof T["streamMap"],
+        >(
+            name: Name,
+            // @ts-ignore hack to generate declare module statements
+            input: T["streamMap"][Name]["input"],
+            // @ts-ignore hack to generate declare module statements
+        ): AsyncIterable<T["streamMap"][Name]["output"]> => {
+            const streamId = ++streamSeq;
+            const controller = new StreamController();
+            streams.set(streamId, controller);
+            send([Frame.StreamStart, name as string, streamId, input]);
+            return {
+                [Symbol.asyncIterator]() {
+                    return {
+                        next: () =>
+                            controller.next() as Promise<
+                                IteratorResult<unknown>
+                            >,
+                        // consumer stopped early (break/return) → cancel server-side
+                        return: (value?: unknown) => {
+                            if (streams.delete(streamId) && connected)
+                                send([Frame.StreamStop, streamId]);
+                            return Promise.resolve({ value, done: true });
+                        },
+                    };
+                },
+                // @ts-ignore generic async iterable
+            } as AsyncIterable<T["streamMap"][Name]["output"]>;
+        },
         /**
          * Like {@link request}, but never throws: returns a typed, discriminated
          * `{ data, error }` result. Narrow on `error` (and `error.code`) to get

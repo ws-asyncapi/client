@@ -104,6 +104,8 @@ export interface WsClient<
         >;
         // biome-ignore lint/suspicious/noExplicitAny: per-channel io
         serverRpcMap: Record<string, { input: any; output: any }>;
+        // biome-ignore lint/suspicious/noExplicitAny: per-channel io
+        streamMap: Record<string, { input: any; output: any }>;
     },
 > {
     /** the underlying browser WebSocket (current connection) */
@@ -146,6 +148,12 @@ export interface WsClient<
         input: T["rpcMap"][C]["input"],
         options?: RequestOptions,
     ): Promise<SafeResult<T["rpcMap"][C]["output"], T["rpcMap"][C]["errors"]>>;
+    /** Open a typed stream; consume with `for await`. Stopping iteration cancels
+     *  it server-side; a server error throws an `RpcError` into the loop. */
+    stream<N extends keyof T["streamMap"]>(
+        name: N,
+        input: T["streamMap"][N]["input"],
+    ): AsyncIterable<T["streamMap"][N]["output"]>;
     close(code?: number, reason?: string): void;
 }
 
