@@ -188,7 +188,17 @@ export function websocketAsyncAPI<
                 );
             }, timeout);
             pending.set(corrId, { resolve, reject, timer });
-            send([Frame.Request, command, corrId, input]);
+            send(
+                options?.idempotencyKey
+                    ? [
+                          Frame.Request,
+                          command,
+                          corrId,
+                          input,
+                          options.idempotencyKey,
+                      ]
+                    : [Frame.Request, command, corrId, input],
+            );
         });
     }
 

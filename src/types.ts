@@ -69,6 +69,13 @@ export interface WebsocketAsyncAPIOptions<
 export interface RequestOptions {
     /** override the default RPC timeout for this call (ms) */
     timeout?: number;
+    /**
+     * Stable idempotency key. When set, the server runs the handler once per key
+     * and replays the cached result to duplicates — so retrying the same call
+     * (e.g. after a reconnect) won't execute side effects twice. Generate one key
+     * per logical action and reuse it across retries.
+     */
+    idempotencyKey?: string;
 }
 
 /**
