@@ -87,6 +87,8 @@ export interface WsClient<
             // biome-ignore lint/suspicious/noExplicitAny: per-channel io/errors
             { input: any; output: any; errors: Record<string, any> }
         >;
+        // biome-ignore lint/suspicious/noExplicitAny: per-channel io
+        serverRpcMap: Record<string, { input: any; output: any }>;
     },
 > {
     /** the underlying browser WebSocket (current connection) */
@@ -105,6 +107,15 @@ export interface WsClient<
     onEvent<E extends keyof T["eventMap"]>(
         event: E,
         callback: (data: T["eventMap"][E]) => void,
+    ): () => void;
+    /** Answer a server→client RPC: receive the server's input, return output. */
+    onRequest<N extends keyof T["serverRpcMap"]>(
+        name: N,
+        handler: (
+            input: T["serverRpcMap"][N]["input"],
+        ) =>
+            | T["serverRpcMap"][N]["output"]
+            | Promise<T["serverRpcMap"][N]["output"]>,
     ): () => void;
     call<C extends keyof T["commandMap"]>(
         command: C,

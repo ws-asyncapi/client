@@ -1,4 +1,4 @@
-import type { AnyChannel, InferClient } from "ws-asyncapi";
+import type { AnyChannel, InferClient, MaybePromise } from "ws-asyncapi";
 import {
     type AnyFrame,
     Frame,
@@ -50,6 +50,8 @@ export function websocketAsyncAPI<
         eventMap: WebsocketAsyncAPIMap["data"][Channel]["eventMap"];
         // @ts-ignore hack to generate declare module statements
         rpcMap: WebsocketAsyncAPIMap["data"][Channel]["rpcMap"];
+        // @ts-ignore hack to generate declare module statements
+        serverRpcMap: WebsocketAsyncAPIMap["data"][Channel]["serverRpcMap"];
     },
 >(
     url: string,
@@ -96,6 +98,11 @@ export function websocketAsyncAPI<
     const closeHandlers = new Set<(event: CloseEvent) => void>();
     const errorHandlers = new Set<(event: Event) => void>();
     const recoverHandlers = new Set<(recovered: boolean) => void>();
+    // server→client RPC handlers, keyed by name
+    const requestHandlers = new Map<
+        string,
+        (input: unknown) => unknown | Promise<unknown>
+    >();
     let outbox: Array<string | Uint8Array> = [];
 
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -223,6 +230,41 @@ export function websocketAsyncAPI<
             }
             case Frame.Ping: {
                 send([Frame.Pong, frame[1]]);
+                break;
+            }
+            case Frame.Request: {
+                // server→client RPC: run the registered handler and reply
+                const [, name, corrId, input] = frame;
+                const handler = requestHandlers.get(name);
+                if (!handler) {
+                    send([
+                        Frame.Error,
+                        corrId,
+                        "NOT_FOUND",
+                        `No client handler for server RPC "${name}"`,
+                    ]);
+                    break;
+                }
+                Promise.resolve()
+                    .then(() => handler(input))
+                    .then(
+                        (result) => send([Frame.Reply, corrId, result]),
+                        (error: unknown) => {
+                            const code =
+                                error instanceof RpcError
+                                    ? error.code
+                                    : "INTERNAL";
+                            const message =
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error);
+                            const data =
+                                error instanceof RpcError
+                                    ? error.data
+                                    : undefined;
+                            send([Frame.Error, corrId, code, message, data]);
+                        },
+                    );
                 break;
             }
             case Frame.Welcome: {
@@ -357,6 +399,21 @@ export function websocketAsyncAPI<
             }
             set.add(callback as (data: unknown) => void);
             return () => set?.delete(callback as (data: unknown) => void);
+        },
+        // @ts-ignore hack to generate declare module statements
+        onRequest: <Name extends keyof T["serverRpcMap"]>(
+            name: Name,
+            // @ts-ignore hack to generate declare module statements
+            handler: (input: T["serverRpcMap"][Name]["input"]) => MaybePromise<
+                // @ts-ignore hack to generate declare module statements
+                T["serverRpcMap"][Name]["output"]
+            >,
+        ) => {
+            requestHandlers.set(
+                name as string,
+                handler as (input: unknown) => unknown,
+            );
+            return () => requestHandlers.delete(name as string);
         },
         call: <
             // @ts-ignore hack to generate declare module statements
