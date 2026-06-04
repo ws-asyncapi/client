@@ -1,3 +1,4 @@
+import type { AnyChannel, InferClient } from "ws-asyncapi";
 import {
     type AnyFrame,
     Frame,
@@ -14,10 +15,17 @@ import type {
     SafeResult,
     WebsocketAsyncAPIMap,
     WebsocketAsyncAPIOptions,
+    WsClient,
 } from "./types.ts";
 import { joinUrlPath } from "./utils.ts";
 
 export * from "./types.ts";
+
+/** Coerce a channel's Query/Headers (which may be `unknown`/`undefined` when
+ *  unset) to the `Record<string,string>` the connect options expect. */
+type AsRecord<T> = T extends Record<string, string>
+    ? T
+    : Record<string, string>;
 export { RpcError } from "ws-asyncapi/wire";
 
 interface PendingRequest {
@@ -426,4 +434,37 @@ export function websocketAsyncAPI<
             } catch {}
         },
     };
+}
+
+/**
+ * Codegen-free typed client. Infers the full client surface (events, commands,
+ * RPCs, typed errors, query/headers) directly from a server `Channel` type — no
+ * CLI step, no generated file, no global `declare module`. Same runtime as
+ * {@link websocketAsyncAPI}.
+ *
+ * ```ts
+ * import type { chat } from "./server";       // the Channel value's type
+ * import { createClient } from "@ws-asyncapi/client";
+ *
+ * const client = createClient<typeof chat>("ws://localhost:3000", "/chat/1");
+ * client.onEvent("message", (m) => m.text);            // typed
+ * const { items } = await client.request("history", { limit: 50 }); // typed
+ * ```
+ */
+export function createClient<C extends AnyChannel>(
+    url: string,
+    path: InferClient<C>["address"],
+    options?: WebsocketAsyncAPIOptions<
+        AsRecord<InferClient<C>["query"]>,
+        AsRecord<InferClient<C>["headers"]>
+    >,
+): WsClient<InferClient<C>> {
+    // The runtime is identical; only the static type differs (inferred from the
+    // channel here, vs. the generated WebsocketAsyncAPIMap in websocketAsyncAPI).
+    const connect = websocketAsyncAPI as unknown as (
+        u: string,
+        p: string,
+        o?: unknown,
+    ) => WsClient<InferClient<C>>;
+    return connect(url, path as string, options);
 }

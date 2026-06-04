@@ -71,6 +71,58 @@ export interface RequestOptions {
     timeout?: number;
 }
 
+/**
+ * The fully-typed client surface, parameterized by a channel's maps. Returned by
+ * `createClient<typeof channel>()` (codegen-free) and structurally identical to
+ * what `websocketAsyncAPI` returns for a CLI-generated channel.
+ */
+export interface WsClient<
+    T extends {
+        // biome-ignore lint/suspicious/noExplicitAny: map value types are per-channel
+        commandMap: Record<string, any>;
+        // biome-ignore lint/suspicious/noExplicitAny: map value types are per-channel
+        eventMap: Record<string, any>;
+        rpcMap: Record<
+            string,
+            // biome-ignore lint/suspicious/noExplicitAny: per-channel io/errors
+            { input: any; output: any; errors: Record<string, any> }
+        >;
+    },
+> {
+    /** the underlying browser WebSocket (current connection) */
+    readonly "~original": WebSocket;
+    readonly connected: boolean;
+    /** server-assigned session id (stable across reconnects) */
+    readonly sessionId: string | null;
+    /** whether the most recent (re)connect recovered missed events */
+    readonly recovered: boolean;
+    /** resolves once the first connection opens */
+    readonly opened: Promise<void>;
+    onOpen(callback: (event: OpenEvent) => void): () => void;
+    onClose(callback: (event: CloseEvent) => void): () => void;
+    onError(callback: (event: Event) => void): () => void;
+    onRecover(callback: (recovered: boolean) => void): () => void;
+    onEvent<E extends keyof T["eventMap"]>(
+        event: E,
+        callback: (data: T["eventMap"][E]) => void,
+    ): () => void;
+    call<C extends keyof T["commandMap"]>(
+        command: C,
+        ...data: T["commandMap"][C] extends never ? [] : [T["commandMap"][C]]
+    ): void;
+    request<C extends keyof T["rpcMap"]>(
+        command: C,
+        input: T["rpcMap"][C]["input"],
+        options?: RequestOptions,
+    ): Promise<T["rpcMap"][C]["output"]>;
+    safeRequest<C extends keyof T["rpcMap"]>(
+        command: C,
+        input: T["rpcMap"][C]["input"],
+        options?: RequestOptions,
+    ): Promise<SafeResult<T["rpcMap"][C]["output"], T["rpcMap"][C]["errors"]>>;
+    close(code?: number, reason?: string): void;
+}
+
 /** Built-in error codes the runtime can produce in addition to declared ones. */
 export type BuiltinErrorCode =
     | "VALIDATION"
