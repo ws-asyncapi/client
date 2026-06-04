@@ -1,6 +1,7 @@
 import type { AnyChannel, InferClient, MaybePromise } from "ws-asyncapi";
 import {
     type AnyFrame,
+    CloseCode,
     Frame,
     jsonCodec,
     PROTOCOL_VERSION,
@@ -67,6 +68,7 @@ export function websocketAsyncAPI<
     const codec = options?.codec ?? jsonCodec;
     const requestTimeout = options?.requestTimeout ?? 30_000;
     const maxBufferSize = options?.maxBufferSize ?? 1024;
+    const contractVersion = options?.contractVersion;
 
     const reconnectOpt = options?.reconnect ?? true;
     const reconnectEnabled = reconnectOpt !== false;
@@ -225,6 +227,21 @@ export function websocketAsyncAPI<
             }
             case Frame.Error: {
                 const [, corrId, code, message, data] = frame;
+                if (corrId === 0) {
+                    // connection-level fatal error (e.g. version mismatch):
+                    // stop reconnecting and surface a clear reason.
+                    manualClose = true;
+                    if (reconnectTimer) clearTimeout(reconnectTimer);
+                    if (!openedSettled) {
+                        openedSettled = true;
+                        rejectOpened(new Error(`ws-asyncapi: ${message}`));
+                    }
+                    rejectAllPending(new RpcError(code, message, data));
+                    try {
+                        ws.close();
+                    } catch {}
+                    break;
+                }
                 const p = pending.get(corrId);
                 if (p) {
                     clearTimeout(p.timer);
@@ -286,6 +303,11 @@ export function websocketAsyncAPI<
                 // On a clean connect, adopt the server's current offset as the
                 // starting cursor so a later blip replays only from here.
                 if (!wasRecovered) lastOffset = offset;
+                // handshake complete → the client is ready to use
+                if (!openedSettled) {
+                    openedSettled = true;
+                    resolveOpened();
+                }
                 for (const cb of recoverHandlers) cb(wasRecovered);
                 break;
             }
@@ -302,13 +324,30 @@ export function websocketAsyncAPI<
             connected = true;
             retries = 0;
             // recovery handshake first, then drain anything buffered offline
-            rawSend(codec.encode([Frame.Hello, sessionId, lastOffset, PROTOCOL_VERSION]));
+            rawSend(
+                codec.encode(
+                    contractVersion
+                        ? [
+                              Frame.Hello,
+                              sessionId,
+                              lastOffset,
+                              PROTOCOL_VERSION,
+                              contractVersion,
+                          ]
+                        : [
+                              Frame.Hello,
+                              sessionId,
+                              lastOffset,
+                              PROTOCOL_VERSION,
+                          ],
+                ),
+            );
             flush();
             startHeartbeat();
-            if (!openedSettled) {
-                openedSettled = true;
-                resolveOpened();
-            }
+            // `opened` resolves on the Welcome handshake (below), not here — so a
+            // server that rejects the handshake (version mismatch) rejects
+            // `opened` instead of resolving it. onOpen handlers still fire on the
+            // raw socket open (they mean "connected", not "handshake ready").
             for (const cb of openHandlers)
                 cb(event as unknown as OpenEvent);
         };
@@ -338,13 +377,34 @@ export function websocketAsyncAPI<
             for (const cb of closeHandlers)
                 cb(event as unknown as CloseEvent);
 
-            if (manualClose || !reconnectEnabled || retries >= maxRetries) {
+            // Version-mismatch closes are fatal: reconnecting won't fix a skew,
+            // so stop and surface a clear reason.
+            const code = (event as { code?: number }).code;
+            const fatal =
+                code === CloseCode.PROTOCOL_MISMATCH ||
+                code === CloseCode.CONTRACT_MISMATCH;
+
+            if (
+                manualClose ||
+                fatal ||
+                !reconnectEnabled ||
+                retries >= maxRetries
+            ) {
                 rejectAllPending(
                     new RpcError("INTERNAL", "connection closed"),
                 );
                 if (!openedSettled) {
                     openedSettled = true;
-                    rejectOpened(event);
+                    rejectOpened(
+                        fatal
+                            ? new Error(
+                                  `ws-asyncapi: ${
+                                      (event as { reason?: string }).reason ||
+                                      "version mismatch"
+                                  }`,
+                              )
+                            : event,
+                    );
                 }
                 return;
             }

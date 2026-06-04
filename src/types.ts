@@ -64,6 +64,14 @@ export interface WebsocketAsyncAPIOptions<
     requestTimeout?: number;
     /** max outbound frames buffered while disconnected (default: 1024) */
     maxBufferSize?: number;
+    /**
+     * Contract version sent in the handshake. If the server's contract hash
+     * differs, the server rejects the connection (close 4409) and the client
+     * stops reconnecting and rejects `opened`. The CLI-generated client supplies
+     * this automatically; for the codegen-free client pass `contractHash(channel)`
+     * if you want runtime contract checking.
+     */
+    contractVersion?: string;
 }
 
 export interface RequestOptions {
