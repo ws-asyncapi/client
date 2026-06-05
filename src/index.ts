@@ -98,6 +98,9 @@ export function websocketAsyncAPI<
         serverRpcMap: WebsocketAsyncAPIMap["data"][Channel]["serverRpcMap"];
         // @ts-ignore hack to generate declare module statements
         streamMap: WebsocketAsyncAPIMap["data"][Channel]["streamMap"];
+        // CLI codegen doesn't emit auth credentials yet → loosely typed on the
+        // generated path; the codegen-free `createClient` infers it precisely.
+        authCredentials: unknown;
     },
 >(
     url: string,
@@ -141,6 +144,13 @@ export function websocketAsyncAPI<
     let lastOffset: number | string = 0;
     let wasRecovered = false;
     let openedSettled = false;
+    // last credentials passed to `authenticate`, re-sent after a reconnect so the
+    // refreshed identity survives a transient drop. `undefined` until first use.
+    let lastCredentials: unknown;
+    let hasCredentials = false;
+    // distinguishes the first handshake from reconnects (so we only auto-resend
+    // credentials on a reconnect, not duplicate an initial `authenticate`).
+    let firstWelcome = true;
 
     const pending = new Map<number, PendingRequest>();
     let streamSeq = 0;
@@ -256,6 +266,29 @@ export function websocketAsyncAPI<
                       ]
                     : [Frame.Request, command, corrId, input],
             );
+        });
+    }
+
+    /** Send an Auth frame and resolve/reject via the shared pending table (the
+     *  server answers with a Reply/Error carrying the same corrId). */
+    function doAuth(credentials: unknown): Promise<void> {
+        const corrId = ++corrSeq;
+        return new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                pending.delete(corrId);
+                reject(
+                    new RpcError(
+                        "TIMEOUT",
+                        `authenticate timed out after ${requestTimeout}ms`,
+                    ),
+                );
+            }, requestTimeout);
+            pending.set(corrId, {
+                resolve: () => resolve(),
+                reject,
+                timer,
+            });
+            send([Frame.Auth, corrId, credentials]);
         });
     }
 
@@ -378,6 +411,13 @@ export function websocketAsyncAPI<
                     openedSettled = true;
                     resolveOpened();
                 }
+                // re-present credentials after a reconnect so the server rebuilds
+                // the refreshed context (its derive/resolve only saw the stale
+                // connect-time token). Best-effort: the app can re-authenticate
+                // explicitly if this fails (e.g. the refreshed token also expired).
+                if (!firstWelcome && hasCredentials)
+                    doAuth(lastCredentials).catch(() => {});
+                firstWelcome = false;
                 for (const cb of recoverHandlers) cb(wasRecovered);
                 break;
             }
@@ -662,6 +702,20 @@ export function websocketAsyncAPI<
                 // @ts-ignore generic result narrowing
                 return { data: null, error };
             }
+        },
+        /**
+         * Refresh credentials on the live connection (token refresh). The server
+         * re-runs `.onAuth` and replaces the connection context — no reconnect.
+         * The credentials are remembered and re-sent automatically after a
+         * reconnect. Rejects with a typed `RpcError` if the server rejects them.
+         */
+        authenticate: (
+            // @ts-ignore hack to generate declare module statements
+            credentials: T["authCredentials"],
+        ): Promise<void> => {
+            lastCredentials = credentials;
+            hasCredentials = true;
+            return doAuth(credentials);
         },
         close(code?: number, reason?: string) {
             manualClose = true;

@@ -128,6 +128,8 @@ export interface WsClient<
         serverRpcMap: Record<string, { input: any; output: any }>;
         // biome-ignore lint/suspicious/noExplicitAny: per-channel io
         streamMap: Record<string, { input: any; output: any }>;
+        // biome-ignore lint/suspicious/noExplicitAny: per-channel credentials shape
+        authCredentials?: any;
     },
 > {
     /** the underlying browser WebSocket (current connection) */
@@ -176,6 +178,14 @@ export interface WsClient<
         name: N,
         input: T["streamMap"][N]["input"],
     ): AsyncIterable<T["streamMap"][N]["output"]>;
+    /**
+     * Refresh credentials on the live connection (token refresh) — the server
+     * re-runs its `.onAuth` handler and replaces the connection context without a
+     * reconnect. Resolves once accepted; rejects with a typed `RpcError` if the
+     * server rejects the credentials. The last credentials passed are re-sent
+     * automatically after a reconnect, so the refreshed identity survives drops.
+     */
+    authenticate(credentials: T["authCredentials"]): Promise<void>;
     close(code?: number, reason?: string): void;
 }
 
