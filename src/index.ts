@@ -14,6 +14,7 @@ import type {
     ReconnectOptions,
     RequestOptions,
     SafeResult,
+    WebSocketLike,
     WebsocketAsyncAPIMap,
     WebsocketAsyncAPIOptions,
     WsClient,
@@ -128,7 +129,10 @@ export function websocketAsyncAPI<
     const heartbeatInterval = hb.interval ?? 25_000;
     const heartbeatTimeout = hb.timeout ?? 10_000;
 
-    let ws: WebSocket;
+    const makeSocket =
+        options?.socket ??
+        ((u: string) => new WebSocket(u) as unknown as WebSocketLike);
+    let ws: WebSocketLike;
     let connected = false;
     let manualClose = false;
     let retries = 0;
@@ -171,7 +175,7 @@ export function websocketAsyncAPI<
 
     function send(frame: AnyFrame) {
         const data = codec.encode(frame);
-        if (connected && ws.readyState === WebSocket.OPEN) {
+        if (connected && ws.readyState === 1 /* OPEN */) {
             rawSend(data);
             return;
         }
@@ -383,7 +387,7 @@ export function websocketAsyncAPI<
     }
 
     function connect() {
-        ws = new WebSocket(fullUrl);
+        ws = makeSocket(fullUrl);
         ws.binaryType = "arraybuffer";
 
         ws.onopen = (event) => {
@@ -421,7 +425,9 @@ export function websocketAsyncAPI<
         ws.onmessage = (event) => {
             let frame: AnyFrame;
             try {
-                frame = codec.decode(event.data);
+                frame = codec.decode(
+                    event.data as string | ArrayBuffer | Uint8Array,
+                );
             } catch {
                 return;
             }
@@ -430,7 +436,7 @@ export function websocketAsyncAPI<
         };
 
         ws.onerror = (event) => {
-            for (const cb of errorHandlers) cb(event);
+            for (const cb of errorHandlers) cb(event as Event);
             if (!openedSettled && !reconnectEnabled) {
                 openedSettled = true;
                 rejectOpened(event);

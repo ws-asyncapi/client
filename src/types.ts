@@ -65,6 +65,11 @@ export interface WebsocketAsyncAPIOptions<
     /** max outbound frames buffered while disconnected (default: 1024) */
     maxBufferSize?: number;
     /**
+     * Custom transport factory (default: `new WebSocket(url)`). Supply one for a
+     * non-browser environment or an in-memory pipe (see `@ws-asyncapi/testing`).
+     */
+    socket?: (url: string) => WebSocketLike;
+    /**
      * Contract version sent in the handshake. If the server's contract hash
      * differs, the server rejects the connection (close 4409) and the client
      * stops reconnecting and rejects `opened`. The CLI-generated client supplies
@@ -72,6 +77,23 @@ export interface WebsocketAsyncAPIOptions<
      * if you want runtime contract checking.
      */
     contractVersion?: string;
+}
+
+/**
+ * Minimal WebSocket surface the client drives — enough to plug in a custom
+ * transport (SSR/Node, React Native, or an in-memory pipe for tests) via the
+ * `socket` option. The browser `WebSocket` satisfies it.
+ */
+export interface WebSocketLike {
+    binaryType?: string;
+    /** 0 CONNECTING · 1 OPEN · 2 CLOSING · 3 CLOSED */
+    readonly readyState: number;
+    send(data: string | Uint8Array): void;
+    close(code?: number, reason?: string): void;
+    onopen: ((event: unknown) => void) | null;
+    onmessage: ((event: { data: unknown }) => void) | null;
+    onerror: ((event: unknown) => void) | null;
+    onclose: ((event: unknown) => void) | null;
 }
 
 export interface RequestOptions {
