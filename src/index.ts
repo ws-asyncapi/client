@@ -98,11 +98,10 @@ export function websocketAsyncAPI<
         serverRpcMap: WebsocketAsyncAPIMap["data"][Channel]["serverRpcMap"];
         // @ts-ignore hack to generate declare module statements
         streamMap: WebsocketAsyncAPIMap["data"][Channel]["streamMap"];
-        // CLI codegen doesn't emit auth credentials yet → loosely typed on the
-        // generated path; the codegen-free `createClient` infers it precisely.
-        authCredentials: unknown;
-        // CLI codegen doesn't emit presence state yet → loosely typed here.
-        presenceState: unknown;
+        // @ts-ignore hack to generate declare module statements
+        authCredentials: WebsocketAsyncAPIMap["data"][Channel]["authCredentials"];
+        // @ts-ignore hack to generate declare module statements
+        presenceState: WebsocketAsyncAPIMap["data"][Channel]["presenceState"];
     },
 >(
     url: string,
