@@ -130,6 +130,8 @@ export interface WsClient<
         streamMap: Record<string, { input: any; output: any }>;
         // biome-ignore lint/suspicious/noExplicitAny: per-channel credentials shape
         authCredentials?: any;
+        // biome-ignore lint/suspicious/noExplicitAny: per-channel presence state shape
+        presenceState?: any;
     },
 > {
     /** the underlying browser WebSocket (current connection) */
@@ -186,7 +188,36 @@ export interface WsClient<
      * automatically after a reconnect, so the refreshed identity survives drops.
      */
     authenticate(credentials: T["authCredentials"]): Promise<void>;
+    /**
+     * Typed presence: announce this connection's state, observe the room roster,
+     * or leave. Available when the channel declares `.presence(...)`. Join/leave/
+     * update changes are delivered as diffs and reconciled into a live roster; the
+     * last announced state is re-sent automatically after a reconnect.
+     */
+    presence: PresenceApi<T["presenceState"]>;
     close(code?: number, reason?: string): void;
+}
+
+/** The `client.presence` surface, typed by the channel's `.presence` schema. */
+export interface PresenceApi<State> {
+    /** this connection's own socket id (known once the roster is hydrated) */
+    readonly self: string | null;
+    /**
+     * Announce or update this connection's presence state. Resolves once the
+     * server has accepted it and returned the current roster (which hydrates
+     * {@link get}/{@link subscribe}); rejects with an `RpcError` if rejected.
+     */
+    set(state: State): Promise<void>;
+    /** Leave presence (stay connected). Other members receive a leave diff. */
+    clear(): Promise<void>;
+    /** The current cached roster: socket id → state. */
+    get(): Map<string, State>;
+    /**
+     * Observe the roster live. The callback fires with the full roster on every
+     * change (join/leave/update). Returns an unsubscribe function. The first
+     * subscriber triggers a snapshot fetch if the roster isn't hydrated yet.
+     */
+    subscribe(callback: (members: Map<string, State>) => void): () => void;
 }
 
 /** Built-in error codes the runtime can produce in addition to declared ones. */

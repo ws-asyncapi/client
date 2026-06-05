@@ -101,6 +101,8 @@ export function websocketAsyncAPI<
         // CLI codegen doesn't emit auth credentials yet → loosely typed on the
         // generated path; the codegen-free `createClient` infers it precisely.
         authCredentials: unknown;
+        // CLI codegen doesn't emit presence state yet → loosely typed here.
+        presenceState: unknown;
     },
 >(
     url: string,
@@ -151,6 +153,14 @@ export function websocketAsyncAPI<
     // distinguishes the first handshake from reconnects (so we only auto-resend
     // credentials on a reconnect, not duplicate an initial `authenticate`).
     let firstWelcome = true;
+    // presence: cached roster (socketId -> state), own id, observers, and the
+    // last announced state (re-sent after a reconnect so we rejoin the roster).
+    let presenceRoster = new Map<string, unknown>();
+    let presenceSelf: string | null = null;
+    let presenceHydrated = false;
+    let lastPresenceState: unknown;
+    let hasPresence = false;
+    const presenceHandlers = new Set<(members: Map<string, unknown>) => void>();
 
     const pending = new Map<number, PendingRequest>();
     let streamSeq = 0;
@@ -265,6 +275,51 @@ export function websocketAsyncAPI<
                           options.idempotencyKey,
                       ]
                     : [Frame.Request, command, corrId, input],
+            );
+        });
+    }
+
+    function notifyPresence() {
+        if (presenceHandlers.size === 0) return;
+        const snapshot = new Map(presenceRoster);
+        for (const cb of presenceHandlers) cb(snapshot);
+    }
+
+    /** Apply a roster snapshot (from a PresenceSet/PresenceQuery reply). */
+    function applyPresenceSnapshot(payload: unknown) {
+        const snap = payload as {
+            self?: string;
+            members?: Record<string, unknown>;
+        };
+        if (typeof snap?.self === "string") presenceSelf = snap.self;
+        presenceRoster = new Map(Object.entries(snap?.members ?? {}));
+        presenceHydrated = true;
+        notifyPresence();
+    }
+
+    /** Send a presence request (Set/Query) and hydrate the roster from its reply. */
+    function presenceRequest(
+        kind: Frame.PresenceSet | Frame.PresenceQuery,
+        state?: unknown,
+    ): Promise<void> {
+        const corrId = ++corrSeq;
+        return new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                pending.delete(corrId);
+                reject(new RpcError("TIMEOUT", "presence request timed out"));
+            }, requestTimeout);
+            pending.set(corrId, {
+                resolve: (payload) => {
+                    applyPresenceSnapshot(payload);
+                    resolve();
+                },
+                reject,
+                timer,
+            });
+            send(
+                kind === Frame.PresenceSet
+                    ? [Frame.PresenceSet, corrId, state]
+                    : [Frame.PresenceQuery, corrId],
             );
         });
     }
@@ -397,6 +452,15 @@ export function websocketAsyncAPI<
                 streams.delete(streamId);
                 break;
             }
+            case Frame.PresenceDiff: {
+                // [18, room, socketId, state?] — state present = join/update,
+                // absent (length 3) = leave
+                const socketId = frame[2];
+                if (frame.length > 3) presenceRoster.set(socketId, frame[3]);
+                else presenceRoster.delete(socketId);
+                notifyPresence();
+                break;
+            }
             case Frame.Welcome: {
                 const [, sid, recovered, offset] = frame;
                 sessionId = sid;
@@ -417,6 +481,19 @@ export function websocketAsyncAPI<
                 // explicitly if this fails (e.g. the refreshed token also expired).
                 if (!firstWelcome && hasCredentials)
                     doAuth(lastCredentials).catch(() => {});
+                // presence: a fresh connection has a new socket id and an empty
+                // server-side roster entry, so re-announce our state (or re-fetch
+                // the roster if we're only observing) after a reconnect.
+                if (!firstWelcome) {
+                    presenceHydrated = false;
+                    if (hasPresence)
+                        presenceRequest(
+                            Frame.PresenceSet,
+                            lastPresenceState,
+                        ).catch(() => {});
+                    else if (presenceHandlers.size > 0)
+                        presenceRequest(Frame.PresenceQuery).catch(() => {});
+                }
                 firstWelcome = false;
                 for (const cb of recoverHandlers) cb(wasRecovered);
                 break;
@@ -716,6 +793,43 @@ export function websocketAsyncAPI<
             lastCredentials = credentials;
             hasCredentials = true;
             return doAuth(credentials);
+        },
+        // @ts-ignore hack to generate declare module statements
+        presence: {
+            get self() {
+                return presenceSelf;
+            },
+            // @ts-ignore presence state typed from the channel
+            set: (state: T["presenceState"]): Promise<void> => {
+                lastPresenceState = state;
+                hasPresence = true;
+                return presenceRequest(Frame.PresenceSet, state);
+            },
+            clear: (): Promise<void> => {
+                hasPresence = false;
+                lastPresenceState = undefined;
+                send([Frame.PresenceClear]);
+                return Promise.resolve();
+            },
+            // @ts-ignore presence state typed from the channel
+            get: (): Map<string, T["presenceState"]> =>
+                new Map(presenceRoster) as never,
+            subscribe: (
+                // @ts-ignore presence state typed from the channel
+                callback: (members: Map<string, T["presenceState"]>) => void,
+            ): (() => void) => {
+                presenceHandlers.add(
+                    callback as (m: Map<string, unknown>) => void,
+                );
+                // hydrate on first interest; otherwise hand over what we have
+                if (!presenceHydrated)
+                    presenceRequest(Frame.PresenceQuery).catch(() => {});
+                else callback(new Map(presenceRoster) as never);
+                return () =>
+                    presenceHandlers.delete(
+                        callback as (m: Map<string, unknown>) => void,
+                    );
+            },
         },
         close(code?: number, reason?: string) {
             manualClose = true;
