@@ -65,6 +65,12 @@ export interface WebsocketAsyncAPIOptions<
     /** max outbound frames buffered while disconnected (default: 1024) */
     maxBufferSize?: number;
     /**
+     * Coalesce volatile `presence.update` calls (cursors) to the latest, flushed
+     * at most every N ms (default: 0 = send each immediately). ~50ms (~20Hz) is a
+     * good cursor default; the receiver smooths between samples.
+     */
+    presenceThrottle?: number;
+    /**
      * Custom transport factory (default: `new WebSocket(url)`). Supply one for a
      * non-browser environment or an in-memory pipe (see `@ws-asyncapi/testing`).
      */
@@ -226,6 +232,14 @@ export interface PresenceApi<State> {
      * {@link get}/{@link subscribe}); rejects with an `RpcError` if rejected.
      */
     set(state: State): Promise<void>;
+    /**
+     * **Volatile** presence update — the cursor hot path. Fire-and-forget
+     * (no ack, no roster snapshot), last-write-wins, dropped while offline, and
+     * coalesced to the latest per `presenceThrottle` window. Merges the patch
+     * into the last-known state, so `update({ cursor })` keeps other fields. Call
+     * {@link set} once first to join the roster.
+     */
+    update(patch: Partial<State>): void;
     /** Leave presence (stay connected). Other members receive a leave diff. */
     clear(): Promise<void>;
     /** The current cached roster: socket id → state. */

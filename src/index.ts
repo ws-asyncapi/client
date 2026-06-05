@@ -118,6 +118,7 @@ export function websocketAsyncAPI<
     const codec = options?.codec ?? jsonCodec;
     const requestTimeout = options?.requestTimeout ?? 30_000;
     const maxBufferSize = options?.maxBufferSize ?? 1024;
+    const presenceThrottleMs = options?.presenceThrottle ?? 0;
     const contractVersion = options?.contractVersion;
 
     const reconnectOpt = options?.reconnect ?? true;
@@ -161,6 +162,9 @@ export function websocketAsyncAPI<
     let lastPresenceState: unknown;
     let hasPresence = false;
     const presenceHandlers = new Set<(members: Map<string, unknown>) => void>();
+    // volatile presence (cursor) coalescing
+    let presencePending: unknown;
+    let presenceTimer: ReturnType<typeof setTimeout> | undefined;
 
     const pending = new Map<number, PendingRequest>();
     let streamSeq = 0;
@@ -322,6 +326,27 @@ export function websocketAsyncAPI<
                     : [Frame.PresenceQuery, corrId],
             );
         });
+    }
+
+    /** Volatile presence send — drops while offline (stale cursors are useless),
+     *  never buffered. Coalesced to the latest per `presenceThrottle` window. */
+    function sendPresenceUpdate(state: unknown) {
+        const flush = (s: unknown) => {
+            if (connected && ws.readyState === 1)
+                rawSend(codec.encode([Frame.PresenceUpdate, s]));
+        };
+        if (presenceThrottleMs <= 0) {
+            flush(state);
+            return;
+        }
+        presencePending = state;
+        if (!presenceTimer)
+            presenceTimer = setTimeout(() => {
+                presenceTimer = undefined;
+                const s = presencePending;
+                presencePending = undefined;
+                if (s !== undefined) flush(s);
+            }, presenceThrottleMs);
     }
 
     /** Send an Auth frame and resolve/reject via the shared pending table (the
@@ -804,6 +829,17 @@ export function websocketAsyncAPI<
                 lastPresenceState = state;
                 hasPresence = true;
                 return presenceRequest(Frame.PresenceSet, state);
+            },
+            // @ts-ignore presence state typed from the channel
+            update: (patch: Partial<T["presenceState"]>): void => {
+                // merge into the last-known full state so a partial update (e.g.
+                // just { cursor }) keeps the other fields; send full state volatilely
+                lastPresenceState = {
+                    ...((lastPresenceState as object | undefined) ?? {}),
+                    ...(patch as object),
+                };
+                hasPresence = true;
+                sendPresenceUpdate(lastPresenceState);
             },
             clear: (): Promise<void> => {
                 hasPresence = false;
