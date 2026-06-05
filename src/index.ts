@@ -831,6 +831,30 @@ export function websocketAsyncAPI<
                     );
             },
         },
+        // @ts-ignore history entries typed from the channel's eventMap
+        history: (
+            room: string,
+            options?: { limit?: number },
+            // @ts-ignore history entries typed from the channel's eventMap
+        ): Promise<unknown[]> => {
+            const corrId = ++corrSeq;
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    pending.delete(corrId);
+                    reject(new RpcError("TIMEOUT", "history request timed out"));
+                }, requestTimeout);
+                pending.set(corrId, {
+                    resolve: (payload) => resolve(payload as unknown[]),
+                    reject,
+                    timer,
+                });
+                send(
+                    options?.limit != null
+                        ? [Frame.HistoryQuery, corrId, room, options.limit]
+                        : [Frame.HistoryQuery, corrId, room],
+                );
+            });
+        },
         close(code?: number, reason?: string) {
             manualClose = true;
             if (reconnectTimer) clearTimeout(reconnectTimer);

@@ -195,8 +195,26 @@ export interface WsClient<
      * last announced state is re-sent automatically after a reconnect.
      */
     presence: PresenceApi<T["presenceState"]>;
+    /**
+     * Fetch a room's retained recent events (history / rewind) — e.g. the chat
+     * backlog when opening a room. Returns a typed, discriminated list (narrow on
+     * `entry.event`). Only rooms this connection is subscribed to are readable.
+     * Requires `.history(event)` on the server; otherwise resolves to `[]`.
+     */
+    history(
+        room: string,
+        options?: { limit?: number },
+    ): Promise<HistoryEntry<T["eventMap"]>[]>;
     close(code?: number, reason?: string): void;
 }
+
+/**
+ * One entry from {@link WsClient.history}: a discriminated union over the
+ * channel's events, so `if (entry.event === "message")` narrows `entry.data`.
+ */
+export type HistoryEntry<EventMap> = {
+    [E in keyof EventMap]: { event: E; data: EventMap[E] };
+}[keyof EventMap];
 
 /** The `client.presence` surface, typed by the channel's `.presence` schema. */
 export interface PresenceApi<State> {
