@@ -24,6 +24,9 @@
         }
     },
     "files": ["dist"],
+    "dependencies": {
+        "ws-asyncapi": "^0.1.0"
+    },
     "homepage": "https://github.com/kravetsone/ws-asyncapi",
     "license": "MIT",
     "readme": "https://github.com/kravetsone/ws-asyncapi",
